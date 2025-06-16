@@ -815,4 +815,4 @@ if __name__ == '__main__':
     if os.getenv("OPENAI_API_KEY") is None:
         print("Error: OPENAI_API_KEY environment variable not set. Please set it in a .env file or your system environment.")
     else:
-        app.run(debug=True, port=5000)
+        app.run(debug=True, host='0.0.0.0', port=os.getenv("PORT", 5000))
