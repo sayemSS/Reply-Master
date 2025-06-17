@@ -658,164 +658,144 @@ class FacebookBot:
         # --- Sentiment and Language Detection ---
         sentiment = self.get_sentiment(comment_text)
         comment_language = self.detect_comment_language(comment_text)
-        commenter_name = comment_info.get("commenter_name", "User") # Default to "User" if name is missing
-
-        # Extract contact information
-        contact_info = self.extract_contact_info(post_info.get("post_content", ""))
-        website_link = contact_info.get("website")
-        whatsapp_number = contact_info.get("whatsapp")
-        facebook_group_link = contact_info.get("facebook_group")
-
-        # Dynamically get company name. Use the extracted one, or fallback to the pre-defined one.
-        # This makes it more robust if the company name appears in the post content.
-        # If the domain is just "com" or similar, use the fallback.
-        inferred_company_name = contact_info.get("extracted_company_name")
-        company_name_to_use = inferred_company_name if inferred_company_name and inferred_company_name != "com" else self.company_name
-
-        # --- Prepare for LLM Request ---
-        messages = []
-
-        # System prompt: Crucial for controlling behavior
-        system_prompt = f"""
-        You are an AI assistant for {company_name_to_use}'s Facebook page.
-        Your goal is to provide concise, helpful, and friendly replies to comments.
-        Keep replies very short, typically 1-2 sentences, and to the point.
-        Address the commenter by their name if available.
-        Mention the company name '{company_name_to_use}' naturally if relevant.
-        If contact information (website, WhatsApp, Facebook group) is available from the post, suggest visiting or contacting through those channels where appropriate.
-        Do NOT generate long paragraphs or elaborate explanations.
-        The current date and time is {datetime.now().strftime("%Y-%m-%d %H:%M")}.
-        """
-        messages.append({"role": "system", "content": system_prompt})
-
-        # Add page and post context
-        page_name = page_info.get("page_name", "this page")
-        post_content = post_info.get("post_content", "No specific post content available.")
-
-        context_message = f"User is commenting on '{page_name}' about a post with content: '{post_content}'."
-        messages.append({"role": "user", "content": context_message})
-
-
-        # Add previous comments for context (if any)
-        context_key = f"{page_id}_{post_id}"
-        if context_key in self.previous_comments:
-            for prev_comment in self.previous_comments[context_key]:
-                messages.append({"role": "user", "content": f"Previous comment from {prev_comment['commenter_name']}: {prev_comment['comment_text']}"})
-
-        # Add the current comment
-        current_comment_message = f"The current comment is from {commenter_name}: '{comment_text}'."
-        messages.append({"role": "user", "content": current_comment_message})
-
-        # Add specific instructions based on extracted info
-        contact_instructions = []
-        if website_link:
-            contact_instructions.append(f"Our website is: {website_link}")
-        if whatsapp_number:
-            contact_instructions.append(f"Our WhatsApp contact is: {whatsapp_number}")
-        if facebook_group_link:
-            contact_instructions.append(f"Our Facebook group is: {facebook_group_link}")
-
-        if contact_instructions:
-            messages.append({"role": "user", "content": "Relevant contact information for our company: " + " ".join(contact_instructions) + " Please suggest visiting our website, WhatsApp, or Facebook group if it makes sense."})
-        else:
-             messages.append({"role": "user", "content": "No specific contact information provided in the post. Generate a polite and concise general reply."})
-
-
-        # Calculate input tokens before the API call
-        input_tokens = self.count_tokens(" ".join([m["content"] for m in messages]))
-
-        # --- Call LLM API ---
-        try:
-            payload = {
-                "model": self.model,
-                "messages": messages,
-                "max_tokens": 50,  # Set a low max_tokens to encourage brevity
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "stop": ["\n\n", "Commenter:", "User:"] # Common stop sequences
-            }
-            response = requests.post(self.base_url, headers=self.headers, json=payload, timeout=10)
-            response.raise_for_status()  # Raise an exception for HTTP errors
-            llm_response_json = response.json()
-            llm_reply = llm_response_json["choices"][0]["message"]["content"].strip()
-            output_tokens = self.count_tokens(llm_reply)
-
-            # Post-process LLM reply
-            # Ensure the reply doesn't start with the commenter's name if already addressed in the prompt
-            if commenter_name.lower() in llm_reply.lower() and llm_reply.lower().startswith(commenter_name.lower()):
-                llm_reply = re.sub(r"^\s*" + re.escape(commenter_name) + r"[\s,.:;]*", "", llm_reply, flags=re.IGNORECASE).strip()
-                if llm_reply.startswith("!"): # Remove leading exclamation if it resulted from stripping
-                    llm_reply = llm_reply[1:].strip()
-
-
-            # Validate LLM response
-            if not self.validate_response(llm_reply, comment_text):
-                # Fallback if LLM generated an invalid response despite instructions
-                reply = self.get_fallback_response(comment_text, sentiment, comment_language)
-                note = "LLM generated an invalid response, using fallback."
-                controlled_status = True
-            else:
-                reply = llm_reply
-                note = ""
-                controlled_status = False
-
-        except requests.exceptions.RequestException as e:
-            print(f"API request failed: {e}")
-            reply = self.get_fallback_response(comment_text, sentiment, comment_language)
-            note = f"API request failed: {e}. Using fallback."
-            controlled_status = True
-            output_tokens = 0 # No output tokens if API call failed
-        except KeyError as e:
-            print(f"Failed to parse LLM response: {e}. Response: {llm_response_json}")
-            reply = self.get_fallback_response(comment_text, sentiment, comment_language)
-            note = f"Failed to parse LLM response: {e}. Using fallback."
-            controlled_status = True
-            output_tokens = 0 # No output tokens if parsing failed
-        except Exception as e:
-            print(f"An unexpected error occurred during LLM reply generation: {e}")
-            reply = self.get_fallback_response(comment_text, sentiment, comment_language)
-            note = f"Unexpected error: {e}. Using fallback."
-            controlled_status = True
-            output_tokens = 0 # No output tokens if an unexpected error occurred
-
-        # Add comment to history after successful processing or fallback
+        self.store_conversation_context(page_id, post_id, page_info, post_info)
         self.add_comment_history(page_id, post_id, comment_info)
 
-        response_time = f"{time.time() - start_time:.2f}s"
+        # Get relevant context and history
+        current_context = self.get_conversation_context(page_id, post_id)
+        comment_history = self.previous_comments.get(f"{page_id}_{post_id}", [])
+
+        # Extract contact info from post content to provide to LLM
+        post_content = post_info.get("post_content", "")
+        contact_info = self.extract_contact_info(post_content)
+        
+        # Use the extracted company name, or fallback to the predefined one
+        actual_company_name = contact_info["extracted_company_name"] if contact_info["extracted_company_name"] else self.company_name
+
+        # Constructing messages for the LLM
+        messages = [
+            {"role": "system", "content": f"""You are an AI assistant for {actual_company_name}, a company that sells products. Your goal is to respond to Facebook comments on posts.
+            
+            Here's what you need to know and follow:
+            1. **Be Concise and Direct**: Your replies must be extremely short, ideally 1-2 sentences, and never more than 25 words. Focus on directly answering the user's immediate question or acknowledging their comment.
+            2. **Maintain Context**: Remember the current post and previous comments on it.
+            3. **Positive/Neutral Tone**: Always be polite, helpful, and maintain a positive or neutral tone.
+            4. **Avoid Out-of-Scope**: Do not provide general information, advice, or explanations that are not directly related to the user's comment or {actual_company_name}'s products/services. Do not introduce yourself unless asked.
+            5. **Prioritize Inbox for Details**: If a comment asks for price, product details, stock, or any specific information that usually leads to a longer conversation or requires personal details, always direct them to "inbox" or "message us". Use phrases like "বিস্তারিত জানতে ইনবক্স করুন" (Inbox for details) or "মেসেজ করুন" (Message us). Do NOT provide prices or extensive details directly in the comment reply.
+            6. **Handle Greetings**: Respond to greetings (hello, hi, assalamualaikum, etc.) with a simple, friendly acknowledgment.
+            7. **Product/Service Focus**: Keep responses centered around {actual_company_name}'s products/services.
+            8. **Language Matching**: Respond in the same language as the comment (Bengali or English). If mixed, prefer Bengali for Bangladeshi context.
+            9. **Contact Information**: If the post contains contact information (website, WhatsApp, Facebook group), you can suggest the user to check those for more information when appropriate, but your primary action should be to direct them to inbox/message.
+            
+            Current time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            Company Name: {actual_company_name}
+            Page Name: {page_info.get('page_name', 'N/A')}
+            Post Content: {post_info.get('post_content', 'N/A')}
+            Post Engagement (Likes: {post_info.get('likes', 0)}, Comments: {post_info.get('comments', 0)}, Shares: {post_info.get('shares', 0)})
+            Extracted Contact Info: Website: {contact_info['website']}, WhatsApp: {contact_info['whatsapp']}, Facebook Group: {contact_info['facebook_group']}
+            Comment History for this Post: {comment_history}
+            """}
+        ]
+
+        # Add the user's comment to the messages
+        messages.append({"role": "user", "content": comment_text})
+
+        llm_reply = ""
+        note = "Reply generated by LLM."
+        input_tokens = 0
+        output_tokens = 0
+
+        try:
+            # Call the OpenRouter API
+            llm_start_time = time.time()
+            response = requests.post(
+                self.base_url,
+                headers=self.headers,
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 70 # Adjust max tokens to encourage shorter replies
+                },
+                timeout=30 # Add a timeout to the request
+            )
+            response.raise_for_status() # Raise an exception for HTTP errors
+            llm_response_data = response.json()
+            llm_reply = llm_response_data['choices'][0]['message']['content'].strip()
+            
+            # Count tokens
+            input_tokens = self.count_tokens(messages[0]['content'] + messages[1]['content'])
+            output_tokens = self.count_tokens(llm_reply)
+
+            # Validate the LLM's reply
+            if not self.validate_response(llm_reply, comment_text):
+                print(f"LLM generated invalid reply: '{llm_reply}'. Falling back.")
+                llm_reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+                note = "LLM reply invalid, fallback used."
+                reply_status_code = 500 # Indicate an issue with LLM response quality
+                output_tokens = self.count_tokens(llm_reply) # Recalculate tokens for fallback
+
+            llm_response_time = f"{time.time() - llm_start_time:.2f}s"
+            print(f"LLM Call Time: {llm_response_time}")
+
+        except requests.exceptions.Timeout:
+            print("OpenRouter API request timed out. Using fallback response.")
+            llm_reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+            note = "API timeout, fallback used."
+            reply_status_code = 504 # Gateway Timeout
+            output_tokens = self.count_tokens(llm_reply) # Recalculate tokens for fallback
+        except requests.exceptions.RequestException as e:
+            print(f"Error calling OpenRouter API: {e}. Using fallback response.")
+            llm_reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+            note = f"API error: {e}, fallback used."
+            reply_status_code = 500 # Internal Server Error
+            output_tokens = self.count_tokens(llm_reply) # Recalculate tokens for fallback
+        except Exception as e:
+            print(f"An unexpected error occurred during reply generation: {e}. Using fallback response.")
+            llm_reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+            note = f"Unexpected error: {e}, fallback used."
+            reply_status_code = 500 # Internal Server Error
+            output_tokens = self.count_tokens(llm_reply) # Recalculate tokens for fallback
+
+        end_time = time.time()
+        response_time = f"{end_time - start_time:.2f}s"
 
         return {
-            "comment_id": comment_id,
-            "commenter_name": commenter_name,
-            "controlled": controlled_status,
-            "input_tokens": input_tokens,
-            "note": note,
-            "output_tokens": output_tokens,
+            "comment_id": comment_info.get("comment_id", ""),
+            "commenter_name": comment_info.get("commenter_name", ""),
             "page_name": page_info.get("page_name", ""),
-            "post_id": post_id,
-            "reply": reply,
-            "response_time": response_time,
+            "post_id": post_info.get("post_id", ""),
+            "reply": llm_reply,
             "sentiment": sentiment,
             "slang_detected": slang_detected,
+            "controlled": True, # Indicates that the response has gone through bot logic
+            "response_time": response_time,
+            "note": note,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "status_code": reply_status_code
         }
-@app.route('/',methods=['GET'])
-def display():
-    return 'welcome'
+
+facebook_bot = FacebookBot()
 
 @app.route('/process-comment', methods=['POST'])
 def process_comment():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Invalid JSON data"}), 400
+    print("Received a POST request to /process-comment!",request.get_json()) 
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
 
-    bot = FacebookBot()
-    response = bot.generate_reply(data)
-    return jsonify(response), response.get("status_code", 200)
+    data = request.get_json()
+    response = facebook_bot.generate_reply(data)
+    status_code = response.get("status_code", 200)
+    if response.get("reply") == "" and status_code == 200:
+        pass
+
+    return jsonify(response), status_code
+
+@app.route('/', methods=['GET'])
+def home():
+    return "Facebook Comment Bot is running!"
 
 if __name__ == '__main__':
-    # For local development, load from .env and run
-    # Ensure OPENAI_API_KEY is set in your .env file
-    if os.getenv("OPENAI_API_KEY") is None:
-        print("Error: OPENAI_API_KEY environment variable not set. Please set it in a .env file or your system environment.")
-    else:
-        app.run(debug=True,host="0.0.0.0",port=5000)
+    app.run(debug=True,host="0.0.0.0",port=5000)
+    
