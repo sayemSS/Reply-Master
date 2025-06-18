@@ -15,19 +15,30 @@ app = Flask(__name__)
 
 class FacebookBot:
     def __init__(self):
-        # Retrieve API key from environment variables
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.base_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.model = "gpt-4o-mini"  # Using the specified model for response generation
+        # Retrieve API key from environment variables (can use OPENAI_API_KEY for OpenRouter too)
+        self.api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        self.base_url = "https://openrouter.ai/api/v1/chat/completions"  # Back to OpenRouter
+        self.model = "openai/gpt-4o-mini"  # Using gpt-4o-mini via OpenRouter (cheaper)
 
         # Ensure API key is present
         if not self.api_key:
-            raise Exception("OPENAI_API_KEY not found in .env file")
+            raise Exception("API key not found. Please set OPENAI_API_KEY or OPENROUTER_API_KEY in .env file")
 
-        # Headers for API requests
+        print(f"Initialized FacebookBot with model: {self.model} via OpenRouter")
+
+        # Test slang detection with known offensive words
+        test_words = ["খানকির পোলা", "মাগির বাচ্চা", "আসসালামু আলাইকুম", "ভালো আছি"]
+        print("Testing slang detection:")
+        for word in test_words:
+            result = self.contains_slang(word)
+            print(f"  '{word}' -> {'SLANG' if result else 'CLEAN'}")
+
+        # Headers for API requests - Updated for OpenRouter
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/yourusername/facebook-bot",  # Optional: your app URL
+            "X-Title": "Facebook Comment Bot"  # Optional: your app name
         }
 
         # Initialize the tokenizer for the chosen model
@@ -47,20 +58,25 @@ class FacebookBot:
         self.comment_counts = {}
 
         # --- IMPORTANT: Define your company name here ---
-        self.company_name = "GhorerBazar" # Set your company name here
+        self.company_name = "GhorerBazar"  # Set your company name here
 
-        # Slang words and patterns (kept as is, assuming current functionality is desired)
+        # Slang words and patterns - Only truly offensive content
         self.slang_words = [
             # Core Bengali abusive terms (most common and offensive)
             "মাগি", "খানি", "চোদা", "চোদি", "চুদি", "চুদা", "রান্ড", "বেশ্যা", "বাঞ্চোত", "মাদারচোদ",
-            "বাল", "ছাগল", "কুত্তা", "শুয়োর", "গাধা", "বালের", "চুদিরভাই",
+            "বাল", "ছাগল", "কুত্তা", "শুয়োর", "গাধা", "বালের", "চুদিরভাই", "খানকি", "খানকির","চোদ","চোদনা","চোদন","বাইঞ্চোদ","মদনা"
 
             # Stronger negative/derogatory terms
             "হারামি", "হারামজাদা", "কুত্তার বাচ্চা", "শুওরের বাচ্চা", "গাধার বাচ্চা",
             "বদমাইশ", "নোংরা", "নোংরামি", "ফাউল", "ফাউল্টু", "বেয়াদব", "ছাগলের বাচ্চা", "চোদানির পুত",
+            "খানকির পোলা", "খানকির বাচ্চা", "মাগির পোলা", "মাগির বাচ্চা", "বালের পোলা", "বালের বাচ্চা",
 
-            # Common expressions of frustration/annoyance (can be mild to moderate slang)
-            "হুদা", "বকবক", "বিরক্তিকর", "ফালতু", "আজেবাজে", "তোর কি", "ধুর", "ভ্যাদাইস", "বাজে",
+            # Common offensive combinations
+            "পোলা", "বাচ্চা", "ছেলে", "মেয়ে"  # When combined with slang words
+
+            # Removed legitimate feedback words: "বিরক্তিকর", "ফালতু", "আজেবাজে", "বাজে" 
+            # These are legitimate criticism, not slang
+                                      "হুদা", "বকবক", "তোর কি", "ধুর", "ভ্যাদাইস",
 
             # Derogatory terms based on physical/mental state (often used as insults)
             "লেংড়া", "পঙ্গু", "অন্ধ", "বোবা", "কালা", "মোটা", "চিকন", "খোঁড়া", "লুলা", "বোকা", "পাগল", "ছাগল",
@@ -80,9 +96,11 @@ class FacebookBot:
             # Bengali romanized slang (expanded significantly)
             "magi", "khani", "choda", "chodi", "chudi", "chuda", "rand", "banchot", "madarchod",
             "bal", "chagol", "kutta", "shuyor", "gadha", "baler", "chodirbhai", "codirbhai",
+            "khankir", "khankir pola", "khankir baccha",
 
             "harami", "haramjada", "kuttar bacha", "shuorer bacha", "gadhar bacha",
             "badmaish", "nongra", "nongrami", "faul", "faltu", "beyadob", "chagoler bacha", "chodanir put",
+            "magir pola", "magir baccha", "baler pola", "baler baccha",
 
             "huda", "bokbok", "biriktikor", "faltu", "ajebaje", "tor ki", "dhur", "vadais", "baje",
 
@@ -96,82 +114,52 @@ class FacebookBot:
             "খানকির পোলা", "খানকির বাচ্চা", "মাগির বাচ্চা", "ফকিরের বাচ্চা", "কুত্তার বাচ্চা",
             "শুয়োরের বাচ্চা", "গাধার বাচ্চা", "হারামির বাচ্চা", "বদমাইশের বাচ্চা", "কুরবানি", "ছাগল",
             "মুড়ি খা", "খাইয়া কাজ নাই", "যা ভাগ", "ভাড়", "গু", "গু-মুত্র", "লেদা", "হাগা",
-            "খানকির পোলা", "খানকির বাচ্চা", "মাগির পোলা", "হারামজাদা পোলা",
-            "যা বাল", "বাল ফালা", "বাল ছিড়া", "মাদারচোদ", "মাগির পোলা",
-            "বালের চুদুর", "কুত্তার বাচ্চা", "হাগা", "হাগিস", "লেদা", "গু"
+            "হারামজাদা পোলা", "যা বাল", "বাল ফালা", "বাল ছিড়া", "মাদারচোদ", "মাগির পোলা",
+            "বালের চুদুর", "হাগা", "হাগিস", "লেদা", "গু"
         ]
 
         self.slang_patterns = [
-            # General repetition patterns for common slang words
+            # Only truly offensive patterns - removed overly broad ones
             r'f+u+c+k+',  # fuck, fukkk, fukkkk
-            r's+h+i+t+',  # shit, shittt
             r'b+i+t+c+h+',  # bitch, bitcch
             r'a+s+s+h+o+l+e+',  # asshole, asshoole
 
-            # Bengali phonetic variations and common misspellings (Romanized)
-            r'ch+o+d+a+', r'ch+u+d+a+', r'ch+o+d+i+', r'ch+u+d+i+',  # choda, chudda, chodi, chuddi
-            r'm+a+g+i+',  # magi, maagi
-            r'k+h+a+n+i+',  # khani, khaani
-            r'r+a+n+d+',  # rand, raand
-            r'b+a+n+c+h+o+t+',  # banchot, baanchot
+            # Bengali phonetic variations - only truly offensive
+            r'ch+o+d+a+', r'ch+u+d+a+', r'ch+o+d+i+', r'ch+u+d+i+',  # choda, chuda variations
+            r'm+a+g+i+',  # magi variations
+            r'r+a+n+d+',  # rand variations
+            r'b+a+n+c+h+o+t+',  # banchot variations
             r'h+a+r+a+m+i+', r'h+a+r+a+m+j+a+d+a+',  # harami, haramjada
-            r'k+u+t+t+a+',  # kutta, kuttaa
-            r's+h+u+o+r+',  # shuor, shuoorr
-            r'g+a+d+h+a+',  # gadha, gaadha
-            r'b+a+l+',  # bal, baal
-            r'b+e+s+h+y+a+',  # beshya, beshyya
+            r'b+e+s+h+y+a+',  # beshya variations
 
-            # Bengali phonetic variations (Bengali script)
+            # Bengali script variations - only truly offensive
             r'চো+দা+', r'চু+দা+', r'চো+দি+', r'চু+দি+',
             r'মা+গি+',
-            r'খা+নি+',
             r'রা+ন্ড+',
             r'বা+ঞ্চো+ত+',
             r'হা+রা+মি+', r'হা+রা+ম+জা+দা+',
-            r'কু+ত্তা+',
-            r'শু+য়ো+র+',
-            r'গা+ধা+',
-            r'বা+ল+',
             r'বে+শ্যা+',
 
-            # Leetspeak and creative spellings (e.g., s_h_i_t, f.u.c.k)
+            # Leetspeak and creative spellings - only for clear offensive words
             r'\b(?:f[\W_]*u[\W_]*c[\W_]*k|f[\W_]*u[\W_]*k)\b',  # f_u_c_k, f.u.c.k, fuk
-            r'\b(?:s[\W_]*h[\W_]*i[\W_]*t|s[\W_]*h[\W_]*y[\W_]*t)\b',  # s_h_i_t, shyt
             r'\b(?:b[\W_]*i[\W_]*t[\W_]*c[\W_]*h)\b',  # b.i.t.c.h
-            r'\b(?:a[\W_]*s[\W_]*s[\W_]*h[\W_]*o[\W_]*l[\W_]*e)\b',  # a.s.s.h.o.l.e
 
-            # Combinations often used in Bengali slang (romanized)
+            # Clear offensive combinations - Updated with more comprehensive patterns
+            r'খানকির ?\w*', r'মাগির ?\w*', r'বালের ?\w*', r'চোদানির ?\w*', r'হারামির ?\w*',
+            r'khankir ?\w*', r'magir ?\w*', r'baler ?\w*', r'chodanir ?\w*', r'haramir ?\w*',
             r'madarchod|motherchod',
-            r'baler ?pola|baler ?baccha',
             r'chodir ?bhai|codir ?bhai',
             r'khanir ?pola|khanir ?baccha|khanir ?magi',
             r'magir ?pola|magir ?baccha|magir ?chele',
             r'choda ?chudi|chudachudi',
-            r'bal ?falai',
-            r'ki ?bal',
-            r'guder ?kotha|gu ?kotha',
-            r'haga|hagi',
-            r'leda',
 
-            # Combinations often used in Bengali slang (Bengali script)
+            # Bengali script offensive combinations - More comprehensive
+            r'খানকির ?\w*', r'মাগির ?\w*', r'বালের ?\w*', r'চোদানির ?\w*',
             r'মাদার ?চোদ',
-            r'বালের ?পোলা|বালের ?বাচ্চা',
             r'চুদির ?ভাই',
             r'খানকির ?পোলা|খানকির ?বাচ্চা|খানকির ?মাগি',
             r'মাগির ?পোলা|মাগির ?বাচ্চা|মাগির ?ছেলে',
-            r'চোদা ?চুদি|চুদাচুদি',
-            r'বাল ?ফালাই',
-            r'কি ?বাল',
-            r'গুদের ?কথা|গু ?কথা',
-            r'হাগা|হাগি',
-            r'লেদা',
-
-            # Specific common short offensive words that can be problematic
-            r'\bgu\b',  # Literally means feces, commonly used as an expletive
-            r'\bbal\b',  # Literally means hair, commonly used as an expletive (like "shit" or "damn")
-            r'\bmal\b',
-            # Can refer to goods, but also used as slang for intoxicants or promiscuous person. Context is key here, but often leans negative.
-            r'\bhada\b',  # Slang for something useless or foolish.
+            r'চোদা ?চুদি|চুদাচুদি'
         ]
         # Keep track of processed comment IDs to avoid incrementing count for duplicate requests
         self.processed_comment_ids = set()
@@ -293,7 +281,7 @@ class FacebookBot:
 
     def contains_slang(self, text):
         """
-        Enhanced slang detection using multiple methods, with refined false positive handling.
+        Enhanced slang detection - focused on truly offensive content with better detection.
         """
         if not text or len(text.strip()) == 0:
             return False
@@ -301,103 +289,169 @@ class FacebookBot:
         cleaned = self.clean_text_for_slang(text)
         original_lower = text.lower().strip()
 
-        # First check for common greetings - these should NEVER be flagged as slang
-        # Expanded greetings list for more robustness
+        print(f"Checking for slang in: '{text}'")  # Debug log
+        print(f"Cleaned text: '{cleaned}'")  # Debug log
+
+        # Comprehensive greetings list - these should NEVER be flagged as slang
         greetings = [
             'hello', 'hi', 'hey', 'hellow', 'helo', 'hii', 'hiii', 'hello there',
-            'hi there', 'hey there', 'assalamu alaikum', 'salam', 'নমস্কার', 'হ্যালো', 'হাই',
-            'আসসালামু আলাইকুম', 'সালাম', 'কেমন আছেন', 'কেমন আছো', 'kemon asen', 'kemon acho'
+            'hi there', 'hey there', 'assalamu alaikum', 'assalamualaikum', 'salam',
+            'walaikum assalam', 'walaikumsalam', 'স্বাগতম', 'নমস্কার', 'হ্যালো', 'হাই',
+            'আসসালামু আলাইকুম', 'আসসালামুয়ালাইকুম', 'ওয়ালাইকুম সালাম',
+            'ওয়ালাইকুমুসসালাম', 'সালাম', 'কেমন আছেন', 'কেমন আছো', 'কেমন আছ',
+            'kemon asen', 'kemon acho', 'kemon achen', 'ki obostha', 'ki khobor',
+            'good morning', 'good afternoon', 'good evening', 'good night',
+            'শুভ সকাল', 'শুভ দুপুর', 'শুভ সন্ধ্যা', 'শুভ রাত্রি'
         ]
 
+        # Check for greetings first
         for greeting in greetings:
-            # Check for exact greeting or greeting at start/end of sentence, or as a standalone word
             if original_lower == greeting or \
                     original_lower.startswith(greeting + ' ') or \
                     original_lower.endswith(' ' + greeting) or \
-                    f" {greeting} " in original_lower:
+                    f" {greeting} " in original_lower or \
+                    original_lower.startswith(greeting + ',') or \
+                    original_lower.startswith(greeting + '!'):
+                print(f"Greeting detected: '{greeting}', skipping slang check")
                 return False
+
+        # Legitimate feedback words that should NOT be considered slang
+        legitimate_feedback = [
+            'বাজে', 'খারাপ', 'ভালো না', 'পছন্দ না', 'দাম বেশি', 'expensive', 'costly',
+            'বিরক্তিকর', 'ফালতু', 'আজেবাজে', 'bad', 'poor', 'terrible', 'awful',
+            'disappointed', 'not good', 'not satisfied', 'সন্তুষ্ট না', 'মন্দ',
+            'দেরি', 'late', 'slow', 'ধীর', 'সমস্যা', 'problem', 'issue'
+        ]
+
+        # If comment contains only legitimate feedback words, don't flag as slang
+        for feedback_word in legitimate_feedback:
+            if feedback_word in original_lower and not any(
+                    slang in original_lower for slang in ['মাগি', 'চোদা', 'ফাক', 'বিচ']):
+                # Check if it's ONLY legitimate criticism without actual slang
+                has_real_slang = False
+                for truly_offensive in ['মাগি', 'চোদা', 'চুদা', 'বেশ্যা', 'মাদারচোদ', 'fuck', 'bitch', 'shit']:
+                    if truly_offensive in original_lower or truly_offensive in cleaned:
+                        has_real_slang = True
+                        break
+                if not has_real_slang:
+                    continue  # Don't return False yet, check for actual slang
 
         # Common false positive words to avoid (expanded and refined)
         false_positives = {
-            'hell': ['hello', 'shell', 'hell-o', 'hellow', 'hello there', 'hell of a', 'what the hell'],
-            'ass': ['class', 'pass', 'mass', 'glass', 'grass', 'assistant', 'assalam', 'assalamu', 'assess', 'asset',
-                    'compass'],
-            'damn': ['adam', 'amsterdam', 'condemn', 'damn it', 'goddamn'],
-            'shit': ['shirts', 'shift', 'fitting', 'shipping', 'kshiti', 'bishti'],
-            # Added Bengali common word soundalikes
+            'hell': ['hello', 'shell', 'hell-o', 'hellow', 'hello there'],
+            'ass': ['class', 'pass', 'mass', 'glass', 'grass', 'assistant', 'assalam', 'assalamu', 'assess', 'asset'],
+            'damn': ['adam', 'amsterdam', 'condemn'],
+            'shit': ['shirts', 'shift', 'fitting', 'shipping'],
             'fuck': ['lucky', 'pluck'],
             'bitch': ['pitch', 'stitch', 'witch', 'rich'],
-            'bal': ['baler', 'balaka', 'football', 'balcony', 'bhalobasa'],  # 'bhalobasa' is common Bengali for love
-            'gu': ['gum', 'gulab', 'guitar'],
-            'mal': ['malum', 'malik', 'animal', 'formal', 'normal']
+            'bal': ['football', 'balcony', 'bhalobasa', 'global', 'tribal'],
+            'gu': ['gum', 'gulab', 'guitar', 'regular', 'singular'],
+            'mal': ['malum', 'malik', 'animal', 'formal', 'normal', 'thermal']
         }
 
-        # Method 1: Strict word boundary matching and false positive handling
-        for slang in self.slang_words:
-            slang_lower = slang.lower()
+        # Method 1: Check for truly offensive words and combinations
+        truly_offensive_words = [
+            "মাগি", "খানি", "চোদা", "চোদি", "চুদি", "চুদা", "রান্ড", "বেশ্যা", "বাঞ্চোত", "মাদারচোদ",
+            "হারামি", "হারামজাদা", "কুত্তার বাচ্চা", "শুওরের বাচ্চা", "গাধার বাচ্চা",
+            "চোদানির পুত", "খানকির পোলা", "খানকির বাচ্চা", "মাগির বাচ্চা", "মাগির পোলা",
+            "বালের পোলা", "বালের বাচ্চা", "খানকি", "খানকির",
+            # English truly offensive
+            "fuck", "fucking", "fucker", "motherfucker", "bitch", "whore", "slut", "cunt",
+            # Romanized truly offensive
+            "magi", "choda", "chudi", "madarchod", "harami", "rand", "khankir pola", "khankir baccha"
+        ]
 
-            # Skip very short problematic words entirely if they are in false_positives keys
-            # and their length is too small to differentiate reliably without context
-            if slang_lower in ['hell', 'ass', 'bad', 'damn', 'gu', 'bal'] and len(slang_lower) <= 3:
-                # For these very short words, we rely more on explicit false_positives checking below.
-                # Avoid direct word boundary match if it leads to too many false positives.
-                # Continue to other methods.
-                continue
+        # Check for exact matches or word boundary matches
+        for offensive_word in truly_offensive_words:
+            offensive_lower = offensive_word.lower()
 
-            # Check if this slang word has known false positives
-            if slang_lower in false_positives:
-                pattern = r'\b' + re.escape(slang_lower) + r'\b'
-                matches = re.findall(pattern, cleaned) or re.findall(pattern, original_lower)
-                if matches:
-                    is_false_positive = False
-                    for fp_word in false_positives[slang_lower]:
-                        # Check if the false positive word is present, or if the slang is part of a larger false positive word
-                        if fp_word in original_lower:
-                            is_false_positive = True
-                            break
-                    if not is_false_positive:
-                        return True
-            else:
-                # Normal word boundary check for other slang words that don't have high false positive rates
-                pattern = r'\b' + re.escape(slang_lower) + r'\b'
-                if re.search(pattern, cleaned) or re.search(pattern, original_lower):
+            # For multi-word phrases, check if the full phrase exists
+            if ' ' in offensive_word:
+                if offensive_lower in original_lower or offensive_lower in cleaned:
+                    print(f"Slang detected: '{offensive_word}' found in comment")
                     return True
+            else:
+                # Check if this word has known false positives
+                if offensive_lower in false_positives:
+                    pattern = r'\b' + re.escape(offensive_lower) + r'\b'
+                    matches = re.findall(pattern, cleaned) or re.findall(pattern, original_lower)
+                    if matches:
+                        is_false_positive = False
+                        for fp_word in false_positives[offensive_lower]:
+                            if fp_word in original_lower:
+                                is_false_positive = True
+                                break
+                        if not is_false_positive:
+                            print(f"Slang detected: '{offensive_word}' found in comment")
+                            return True
+                else:
+                    # Normal word boundary check for truly offensive words
+                    pattern = r'\b' + re.escape(offensive_lower) + r'\b'
+                    if re.search(pattern, cleaned) or re.search(pattern, original_lower):
+                        print(f"Slang detected: '{offensive_word}' found in comment")
+                        return True
 
-        # Method 2: Enhanced Pattern matching for repeated characters, leetspeak, and spaced-out slang
-        # This method is now more aggressive after initial false positive filtering.
-        for pattern_regex in self.slang_patterns:
-            # Check both cleaned and original_lower for robustness
-            if re.search(pattern_regex, cleaned, re.IGNORECASE) or \
-                    re.search(pattern_regex, original_lower, re.IGNORECASE):
-                # Add a sanity check for very short matches to avoid overly aggressive detection if not part of a larger pattern
-                # For example, 'hi' matching 'h+i+' might be caught by a pattern, but should be ignored.
-                # This requires careful tuning.
-                # A better approach here is to ensure the patterns themselves are specific enough.
+        # Method 2: Check for offensive combinations (like "খানকির + পোলা")
+        offensive_combinations = [
+            ["খানকির", "পোলা"], ["খানকির", "বাচ্চা"], ["মাগির", "পোলা"], ["মাগির", "বাচ্চা"],
+            ["বালের", "পোলা"], ["বালের", "বাচ্চা"], ["চোদানির", "পুত"], ["হারামির", "বাচ্চা"],
+            ["khankir", "pola"], ["khankir", "baccha"], ["magir", "pola"], ["magir", "baccha"]
+        ]
+
+        for combo in offensive_combinations:
+            # Check if both parts of the combination exist in the text
+            if all(part.lower() in original_lower or part.lower() in cleaned for part in combo):
+                print(f"Slang detected: Offensive combination '{' '.join(combo)}' found in comment")
                 return True
 
-        # Method 3: Check for slang with mixed symbols and no spaces (after initial cleaning)
-        # The `clean_text_for_slang` already handles symbol replacement.
-        # So `cleaned` text should be sufficient for this.
-        # This method is less needed if `clean_text_for_slang` is robust, but kept for extra layer.
-        no_space_text_cleaned = re.sub(r'\s+', '', cleaned)
-        for slang in self.slang_words:
-            slang_lower = slang.lower()
-            clean_slang_pattern = re.sub(r'[\s\-_.,!@#$%^&*()+={}[\]|\\:";\'<>?/~`]', '', slang_lower)
+        # Method 3: Pattern matching for clear offensive patterns
+        offensive_patterns = [
+            r'f+u+c+k+',  # fuck variations
+            r'b+i+t+c+h+',  # bitch variations
+            r'ch+o+d+a+', r'ch+u+d+a+',  # choda, chuda variations
+            r'm+a+g+i+',  # magi variations
+            # Clear offensive combinations - Updated with more comprehensive patterns
+            r'খানকির ?\w*', r'মাগির ?\w*', r'বালের ?\w*', r'চোদানির ?\w*', r'হারামির ?\w*',
+            r'khankir ?\w*', r'magir ?\w*', r'baler ?\w*', r'chodanir ?\w*', r'haramir ?\w*',
+            r'madarchod|motherchod',
+            r'chodir ?bhai|codir ?bhai',
+            r'khanir ?pola|khanir ?baccha|khanir ?magi',
+            r'magir ?pola|magir ?baccha|magir ?chele',
+            r'choda ?chudi|chudachudi',
+            # Bengali script offensive combinations - More comprehensive
+            r'খানকির ?\w*', r'মাগির ?\w*', r'বালের ?\w*', r'চোদানির ?\w*',
+            r'মাদার ?চোদ',
+            r'চুদির ?ভাই',
+            r'খানকির ?পোলা|খানকির ?বাচ্চা|খানকির ?মাগি',
+            r'মাগির ?পোলা|মাগির ?বাচ্চা|মাগির ?ছেলে',
+            r'চোদা ?চুদি|চুদাচুদি'
+        ]
 
-            # Check if cleaned slang (without symbols) is present in the no-space version of the cleaned text
-            if clean_slang_pattern and clean_slang_pattern in no_space_text_cleaned and len(clean_slang_pattern) > 2:
-                # Add a length check to avoid single/double character false positives
-                # Ensure it's not a common false positive in its non-slang form
-                if slang_lower in false_positives:
-                    is_false_positive = False
-                    for fp_word in false_positives[slang_lower]:
-                        if fp_word in original_lower:
-                            is_false_positive = True
-                            break
-                    if not is_false_positive:
-                        return True
-                else:
-                    return True
+        for pattern_regex in offensive_patterns:
+            if re.search(pattern_regex, cleaned, re.IGNORECASE) or \
+                    re.search(pattern_regex, original_lower, re.IGNORECASE):
+                print(f"Slang detected: Pattern '{pattern_regex}' matched in comment")
+                return True
+
+        # Method 4: Additional check for spaced out offensive words
+        # Remove all spaces and special characters to catch "খা ন কি র  পো লা" type variations
+        no_space_original = re.sub(r'[^a-zA-Z\u0980-\u09FF]', '', original_lower)
+        no_space_cleaned = re.sub(r'[^a-zA-Z\u0980-\u09FF]', '', cleaned)
+
+        spaced_offensive = [
+            "খানকিরপোলা", "খানকিরবাচ্চা", "মাগিরপোলা", "মাগিরবাচ্চা",
+            "বালেরপোলা", "বালেরবাচ্চা", "চোদানিরপুত", "মাদারচোদ",
+            "khankirpola", "khankirbaccha", "magirpola", "magirbaccha"
+        ]
+
+        for spaced_word in spaced_offensive:
+            if spaced_word in no_space_original or spaced_word in no_space_cleaned:
+                print(f"Slang detected: Spaced offensive word '{spaced_word}' found in comment")
+                return True
+
+        print("No slang detected")
+        return False
+
         return False
 
     def get_sentiment(self, comment):
@@ -422,23 +476,30 @@ class FacebookBot:
     def validate_response(self, reply, comment):
         """
         Validates the generated reply to ensure it's within scope and length limits.
-        Prevents the bot from giving overly general or lengthy responses.
+        More relaxed validation rules.
         """
-        # The LLM prompt will now focus on generating short replies,
-        # so this validation can be less strict or removed if the LLM is well-controlled.
-        # Keeping it for an extra layer of safety.
-        out_of_scope_indicators = [
-            'generally', 'usually', 'typically', 'in most cases',
-            'experts say', 'studies show', 'research indicates',
-            'you should try', 'i recommend', 'best practice'
+        # Skip validation for very short replies
+        if len(reply.split()) <= 5:
+            return True
+
+        # Very problematic phrases that should be avoided
+        problematic_indicators = [
+            'i am an ai', 'i cannot', 'i am not able', 'as an ai',
+            'i do not have access', 'i cannot provide medical advice',
+            'consult a professional', 'seek professional help'
         ]
         reply_lower = reply.lower()
-        # Check for out-of-scope phrases
-        if any(indicator in reply_lower for indicator in out_of_scope_indicators):
+
+        # Check for problematic AI-like responses
+        if any(indicator in reply_lower for indicator in problematic_indicators):
+            print(f"Validation failed: Contains problematic phrase - {reply}")
             return False
-        # The LLM will be instructed to keep replies short, so this check acts as a safeguard.
-        if len(reply.split()) > 25: # Reduced to 25 words for even shorter replies
+
+        # More generous word limit
+        if len(reply.split()) > 50:  # Increased from 25 to 50 words
+            print(f"Validation failed: Too long ({len(reply.split())} words) - {reply}")
             return False
+
         return True
 
     def get_fallback_response(self, comment, sentiment, comment_language):
@@ -500,17 +561,17 @@ class FacebookBot:
         elif sentiment == "Negative":
             if comment_language == "bangla":
                 fallbacks = [
-                    "দুঃখিত! ইনবক্স করুন।",
-                    "আমরা বিষয়টি দেখছি।",
-                    "দুঃখিত! যোগাযোগ করুন।",
-                    "অসুবিধার জন্য ক্ষমাপ্রার্থী।"
+                    "দুঃখিত আপনার অসুবিধার জন্য। ইনবক্স করুন সমাধানের জন্য।",
+                    "আপনার সমস্যার কথা বুঝতে পারছি। আমাদের সাথে যোগাযোগ করুন।",
+                    "ক্ষমাপ্রার্থী। আপনার সমস্যা সমাধানে আমরা আছি।",
+                    "আপনার অভিযোগ গুরুত্বের সাথে দেখছি। ইনবক্স করুন।"
                 ]
             else:  # Defaults to English if not explicitly Bangla
                 fallbacks = [
-                    "Sorry! Please message us.",
-                    "We're looking into it.",
-                    "Sorry! Contact us.",
-                    "Apologies for the trouble."
+                    "Sorry for the inconvenience. Please message us for solution.",
+                    "We understand your concern. Please contact us.",
+                    "Apologies for the issue. We're here to help.",
+                    "We take your feedback seriously. Please inbox us."
                 ]
         else:  # Neutral sentiment
             if comment_language == "bangla":
@@ -531,28 +592,79 @@ class FacebookBot:
 
     def detect_comment_language(self, comment):
         """
-        Detects if a comment is primarily in Bangla or English by counting character sets.
+        Enhanced language detection to better identify Bengali, English, or mixed comments.
         Returns "bangla", "english", or "mixed".
         """
         bangla_chars = re.findall(r'[\u0980-\u09FF]', comment)  # Unicode range for Bengali characters
         english_chars = re.findall(r'[a-zA-Z]', comment)  # English alphabet characters
 
-        bangla_count = len(bangla_chars)
-        english_count = len(english_chars)
+        # Common Bengali words in Roman script
+        bangla_roman_words = [
+            'kemon', 'koto', 'kothai', 'kotha', 'koto taka', 'taka', 'dam', 'chele', 'meye',
+            'bhai', 'bon', 'apa', 'apu', 'dada', 'didi', 'mama', 'chacha', 'khala', 'nana',
+            'nani', 'dadu', 'thakur', 'dadar', 'pore', 'hoyto', 'hoito', 'aar', 'ar',
+            'amra', 'tumi', 'tora', 'amader', 'tomader', 'oder', 'ekhane', 'okhane',
+            'sekhane', 'etar', 'otar', 'setar', 'eita', 'oita', 'seita', 'keno', 'kemon',
+            'kotobela', 'kotokhon', 'amake', 'tomake', 'take', 'kew', 'keu', 'kichu', 'kichui',
+            'shob', 'sob', 'shobai', 'sobai', 'dhonnobad', 'shukriya', 'maaf', 'khoma',
+            'valo', 'bhalo', 'kharap', 'shundor', 'darun', 'onek', 'onno', 'anno',
+            'dhormo', 'islam', 'hindu', 'kristian', 'buddha', 'masjid', 'mondir', 'girja',
+            'bihar', 'namaj', 'puja', 'upobash', 'roja', 'eid', 'puja', 'durga', 'kali',
+            'laxmi', 'shorasshoti', 'ganesha', 'hanuman', 'ram', 'krishna', 'shib', 'bishnu',
+            'allah', 'islamer', 'musolman', 'diner', 'rater', 'shokal', 'dupur', 'bikel',
+            'sondha', 'rat', 'din', 'mash', 'bochor', 'tarik', 'shomoyer', 'ghumate',
+            'khete', 'khabarer', 'paanir', 'chaa', 'coffee', 'doodh', 'chini', 'nun',
+            'tel', 'masala', 'mishti', 'tetuler', 'amer', 'jamrul', 'komolar', 'anarosher',
+            'aamer', 'jamer', 'litchur', 'kataler', 'shofeda', 'atafol', 'daler', 'bhater',
+            'ruti', 'poratar', 'sobji', 'maachher', 'mangsher', 'murgi', 'dim', 'halka',
+            'jhaal', 'nonta', 'mishti', 'tita', 'tikha', 'lebu', 'ada', 'roshun', 'peyaj',
+            'holud', 'dhonia', 'jeera', 'elach', 'darchini', 'lobongo', 'badi', 'ghor',
+            'basha', 'school', 'college', 'university', 'chapkori', 'kaaj', 'byabsha',
+            'dokani', 'haat', 'bazar', 'bank', 'hospital', 'pharmecy', 'daktar', 'noyon',
+            'kan', 'naak', 'mukh', 'gola', 'hat', 'pa', 'mathaa', 'chuler', 'deher',
+            'shorir', 'mon', 'chokh', 'daat', 'jiv', 'ghar', 'pet', 'buk', 'pith',
+            'komorer', 'haatur', 'thenger', 'angul', 'nokhher', 'gaaye', 'chaal',
+            'ekhono', 'akhono', 'ekhon', 'akhon', 'pore', 'age', 'agamir', 'ager',
+            'shesher', 'prothom', 'duitiyo', 'tritiyo', 'chaturtha', 'shob'
+        ]
 
-        if bangla_count > english_count * 0.5:  # More lenient for Bangla if some English present
+        # Check for Bengali Roman words
+        comment_lower = comment.lower()
+        bangla_roman_count = sum(1 for word in bangla_roman_words if word in comment_lower)
+
+        # Common English words that indicate English content
+        english_words = [
+            'the', 'is', 'at', 'which', 'on', 'are', 'as', 'able', 'about', 'after',
+            'all', 'also', 'am', 'an', 'and', 'any', 'are', 'as', 'at', 'be', 'been',
+            'by', 'can', 'could', 'do', 'for', 'from', 'get', 'have', 'he', 'her', 'him',
+            'his', 'how', 'i', 'if', 'in', 'into', 'is', 'it', 'its', 'just', 'like',
+            'make', 'most', 'new', 'no', 'not', 'now', 'of', 'on', 'one', 'only', 'or',
+            'other', 'our', 'out', 'over', 'said', 'same', 'see', 'she', 'should', 'so',
+            'some', 'take', 'than', 'that', 'the', 'their', 'them', 'there', 'these',
+            'they', 'this', 'time', 'to', 'two', 'up', 'us', 'use', 'very', 'want',
+            'was', 'water', 'way', 'we', 'well', 'were', 'what', 'when', 'where',
+            'which', 'who', 'will', 'with', 'would', 'you', 'your'
+        ]
+
+        english_word_count = sum(1 for word in english_words if word in comment_lower.split())
+
+        bangla_count = len(bangla_chars) + bangla_roman_count
+        english_count = len(english_chars) + english_word_count
+
+        # More sophisticated detection
+        if bangla_count > english_count:
             return "bangla"
-        elif english_count > bangla_count * 0.5:  # More lenient for English if some Bangla present
+        elif english_count > bangla_count * 1.5:  # Give English some advantage
             return "english"
         else:
-            return "mixed"  # If counts are roughly equal or both are low, treat as mixed or unknown
+            return "mixed"
 
     def extract_contact_info(self, post_content):
         """
         Extracts website link, WhatsApp number, and Facebook group link from post content.
         Updated to extract company name from the website link and make it dynamic.
         """
-        website_link = re.search(r'https://(\S+?)\.com/\S*', post_content) # Broader match for website
+        website_link = re.search(r'https://(\S+?)\.com/\S*', post_content)  # Broader match for website
         whatsapp_number = re.search(r'\+880\d{10}', post_content)
         facebook_group_link = re.search(r'https://www\.facebook\.com/groups/\S*', post_content)
 
@@ -562,12 +674,11 @@ class FacebookBot:
             domain = website_link.group(1)
             extracted_company_name = domain.split('.')[-1] if '.' in domain else domain
 
-
         return {
             "website": website_link.group(0) if website_link else None,
             "whatsapp": whatsapp_number.group(0) if whatsapp_number else None,
             "facebook_group": facebook_group_link.group(0) if facebook_group_link else None,
-            "extracted_company_name": extracted_company_name # Return extracted company name
+            "extracted_company_name": extracted_company_name  # Return extracted company name
         }
 
     def generate_reply(self, json_data):
@@ -576,6 +687,7 @@ class FacebookBot:
         It first checks for slang, then determines sentiment and language,
         builds a context for the LLM, and finally generates a controlled reply.
         Includes token counting for the LLM response.
+        Enhanced to reply in the same language as the comment.
         """
         start_time = time.time()
         reply_status_code = 200  # Default status code for OK
@@ -634,11 +746,11 @@ class FacebookBot:
         # --- Slang Detection ---
         slang_detected = self.contains_slang(comment_text)
         if slang_detected:
-            reply = ""  # No reply for slang
-            sentiment = "Negative" # Assign negative sentiment for slang comments
-            note = "Slang detected. No reply generated."
+            reply = ""  # No reply for actual offensive slang
+            sentiment = "Negative"  # Assign negative sentiment for slang comments
+            note = "Offensive content detected. No reply generated."
             response_time = f"{time.time() - start_time:.2f}s"
-            # Return immediate response if slang is detected
+            # Return immediate response if offensive slang is detected
             return {
                 "comment_id": comment_id,
                 "commenter_name": comment_info.get("commenter_name", ""),
@@ -652,150 +764,253 @@ class FacebookBot:
                 "response_time": response_time,
                 "sentiment": sentiment,
                 "slang_detected": True,
-                "status_code": 200 # Or a custom status code if preferred for slang, e.g., 204 No Content or 403 Forbidden
+                "status_code": 200
             }
 
         # --- Sentiment and Language Detection ---
         sentiment = self.get_sentiment(comment_text)
         comment_language = self.detect_comment_language(comment_text)
-        self.store_conversation_context(page_id, post_id, page_info, post_info)
+        commenter_name = comment_info.get("commenter_name", "User")  # Default to "User" if name is missing
+
+        # Extract contact information
+        contact_info = self.extract_contact_info(post_info.get("post_content", ""))
+        website_link = contact_info.get("website")
+        whatsapp_number = contact_info.get("whatsapp")
+        facebook_group_link = contact_info.get("facebook_group")
+
+        # Dynamically get company name. Use the extracted one, or fallback to the pre-defined one.
+        # This makes it more robust if the company name appears in the post content.
+        # If the domain is just "com" or similar, use the fallback.
+        inferred_company_name = contact_info.get("extracted_company_name")
+        company_name_to_use = inferred_company_name if inferred_company_name and inferred_company_name != "com" else self.company_name
+
+        # --- Prepare for LLM Request ---
+        messages = []
+
+        # Enhanced System prompt: Crucial for controlling behavior and language matching
+        language_instruction = ""
+        if comment_language == "bangla":
+            language_instruction = "IMPORTANT: The user is commenting in Bengali/Bangla. You MUST respond ONLY in Bengali/Bangla language. Use Bengali script (বাংলা) or Bengali romanized text when appropriate."
+        elif comment_language == "english":
+            language_instruction = "IMPORTANT: The user is commenting in English. You MUST respond ONLY in English language."
+        else:  # mixed
+            language_instruction = "IMPORTANT: The user is commenting in mixed language (Bengali+English). You should respond in the predominant language of their comment, or in Bengali if uncertain."
+
+        system_prompt = f"""
+        You are an AI assistant for {company_name_to_use}'s Facebook page.
+        Your goal is to provide concise, helpful, and friendly replies to comments.
+
+        {language_instruction}
+
+        Keep replies very short, typically 1-2 sentences, and to the point.
+        Address the commenter by their name if available.
+        Mention the company name '{company_name_to_use}' naturally if relevant.
+
+        For negative feedback or complaints:
+        - Acknowledge their concern professionally
+        - Apologize if appropriate 
+        - Direct them to inbox/contact for resolution
+        - Stay positive and helpful
+
+        For positive feedback:
+        - Thank them warmly
+        - Show appreciation
+
+        For questions:
+        - Answer briefly if you can
+        - Direct to contact information if needed
+
+        If contact information (website, WhatsApp, Facebook group) is available from the post, suggest visiting or contacting through those channels where appropriate.
+        Do NOT generate long paragraphs or elaborate explanations.
+        Use emojis appropriately to make responses friendly.
+        The current date and time is {datetime.now().strftime("%Y-%m-%d %H:%M")}.
+
+        Remember: Match the language of the comment - if they write in Bengali, reply in Bengali. If they write in English, reply in English.
+        Handle criticism professionally - don't ignore negative feedback, respond with care and direct to proper channels.
+        """
+        messages.append({"role": "system", "content": system_prompt})
+
+        # Add page and post context
+        page_name = page_info.get("page_name", "this page")
+        post_content = post_info.get("post_content", "No specific post content available.")
+
+        context_message = f"User is commenting on '{page_name}' about a post with content: '{post_content}'."
+        messages.append({"role": "user", "content": context_message})
+
+        # Add previous comments for context (if any)
+        context_key = f"{page_id}_{post_id}"
+        if context_key in self.previous_comments:
+            for prev_comment in self.previous_comments[context_key]:
+                messages.append({"role": "user",
+                                 "content": f"Previous comment from {prev_comment['commenter_name']}: {prev_comment['comment_text']}"})
+
+        # Add the current comment with language detection info
+        current_comment_message = f"The current comment is from {commenter_name} in {comment_language} language: '{comment_text}'."
+        messages.append({"role": "user", "content": current_comment_message})
+
+        # Add specific instructions based on extracted info
+        contact_instructions = []
+        if website_link:
+            contact_instructions.append(f"Our website is: {website_link}")
+        if whatsapp_number:
+            contact_instructions.append(f"Our WhatsApp contact is: {whatsapp_number}")
+        if facebook_group_link:
+            contact_instructions.append(f"Our Facebook group is: {facebook_group_link}")
+
+        if contact_instructions:
+            messages.append({"role": "user", "content": "Relevant contact information for our company: " + " ".join(
+                contact_instructions) + " Please suggest visiting our website, WhatsApp, or Facebook group if it makes sense."})
+        else:
+            messages.append({"role": "user",
+                             "content": "No specific contact information provided in the post. Generate a polite and concise general reply in the same language as the comment."})
+
+        # Calculate input tokens before the API call
+        input_tokens = self.count_tokens(" ".join([m["content"] for m in messages]))
+
+        # --- Call OpenRouter GPT-4o-mini API ---
+        try:
+            payload = {
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": 100,  # Increased slightly for better language flexibility
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "stop": ["\n\n", "Commenter:", "User:"]  # Common stop sequences
+            }
+            response = requests.post(self.base_url, headers=self.headers, json=payload, timeout=15)
+
+            # Handle specific HTTP errors
+            if response.status_code == 402:
+                print(
+                    "Payment Required: Insufficient credits or no payment method. Please add credits to your account.")
+                reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+                note = "Payment Required: Insufficient API credits. Using fallback."
+                controlled_status = True
+                output_tokens = 0
+            elif response.status_code == 401:
+                print("Unauthorized: Invalid API key. Please check your API key.")
+                reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+                note = "Unauthorized: Invalid API key. Using fallback."
+                controlled_status = True
+                output_tokens = 0
+            elif response.status_code == 429:
+                print("Rate Limited: Too many requests. Please wait and try again.")
+                reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+                note = "Rate Limited: Too many requests. Using fallback."
+                controlled_status = True
+                output_tokens = 0
+            else:
+                response.raise_for_status()  # Raise an exception for other HTTP errors
+                llm_response_json = response.json()
+                llm_reply = llm_response_json["choices"][0]["message"]["content"].strip()
+                output_tokens = self.count_tokens(llm_reply)
+
+                # Post-process LLM reply
+                # Ensure the reply doesn't start with the commenter's name if already addressed in the prompt
+                if commenter_name.lower() in llm_reply.lower() and llm_reply.lower().startswith(commenter_name.lower()):
+                    llm_reply = re.sub(r"^\s*" + re.escape(commenter_name) + r"[\s,.:;]*", "", llm_reply,
+                                       flags=re.IGNORECASE).strip()
+                    if llm_reply.startswith("!"):  # Remove leading exclamation if it resulted from stripping
+                        llm_reply = llm_reply[1:].strip()
+
+                # Validate LLM response
+                print(f"Original LLM Response: '{llm_reply}'")  # Debug log
+                print(f"Response word count: {len(llm_reply.split())}")  # Debug log
+
+                if not self.validate_response(llm_reply, comment_text):
+                    # Log why validation failed
+                    print(f"Validation failed for response: '{llm_reply}'")
+                    reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+                    note = f"LLM response rejected by validation: '{llm_reply[:50]}...'. Using fallback."
+                    controlled_status = True
+                else:
+                    reply = llm_reply
+                    note = ""
+                    controlled_status = False
+
+        except requests.exceptions.RequestException as e:
+            print(f"API request failed: {e}")
+            reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+            note = f"API request failed: {e}. Using fallback."
+            controlled_status = True
+            output_tokens = 0  # No output tokens if API call failed
+        except KeyError as e:
+            print(
+                f"Failed to parse LLM response: {e}. Response: {llm_response_json if 'llm_response_json' in locals() else 'No response'}")
+            reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+            note = f"Failed to parse LLM response: {e}. Using fallback."
+            controlled_status = True
+            output_tokens = 0  # No output tokens if parsing failed
+        except Exception as e:
+            print(f"An unexpected error occurred during LLM reply generation: {e}")
+            reply = self.get_fallback_response(comment_text, sentiment, comment_language)
+            note = f"Unexpected error: {e}. Using fallback."
+            controlled_status = True
+            output_tokens = 0  # No output tokens if an unexpected error occurred
+
+        # Add comment to history after successful processing or fallback
         self.add_comment_history(page_id, post_id, comment_info)
 
-        # Get relevant context and history
-        current_context = self.get_conversation_context(page_id, post_id)
-        comment_history = self.previous_comments.get(f"{page_id}_{post_id}", [])
-
-        # Extract contact info from post content to provide to LLM
-        post_content = post_info.get("post_content", "")
-        contact_info = self.extract_contact_info(post_content)
-        
-        # Use the extracted company name, or fallback to the predefined one
-        actual_company_name = contact_info["extracted_company_name"] if contact_info["extracted_company_name"] else self.company_name
-
-        # Constructing messages for the LLM
-        messages = [
-            {"role": "system", "content": f"""You are an AI assistant for {actual_company_name}, a company that sells products. Your goal is to respond to Facebook comments on posts.
-            
-            Here's what you need to know and follow:
-            1. **Be Concise and Direct**: Your replies must be extremely short, ideally 1-2 sentences, and never more than 25 words. Focus on directly answering the user's immediate question or acknowledging their comment.
-            2. **Maintain Context**: Remember the current post and previous comments on it.
-            3. **Positive/Neutral Tone**: Always be polite, helpful, and maintain a positive or neutral tone.
-            4. **Avoid Out-of-Scope**: Do not provide general information, advice, or explanations that are not directly related to the user's comment or {actual_company_name}'s products/services. Do not introduce yourself unless asked.
-            5. **Prioritize Inbox for Details**: If a comment asks for price, product details, stock, or any specific information that usually leads to a longer conversation or requires personal details, always direct them to "inbox" or "message us". Use phrases like "বিস্তারিত জানতে ইনবক্স করুন" (Inbox for details) or "মেসেজ করুন" (Message us). Do NOT provide prices or extensive details directly in the comment reply.
-            6. **Handle Greetings**: Respond to greetings (hello, hi, assalamualaikum, etc.) with a simple, friendly acknowledgment.
-            7. **Product/Service Focus**: Keep responses centered around {actual_company_name}'s products/services.
-            8. **Language Matching**: Respond in the same language as the comment (Bengali or English). If mixed, prefer Bengali for Bangladeshi context.
-            9. **Contact Information**: If the post contains contact information (website, WhatsApp, Facebook group), you can suggest the user to check those for more information when appropriate, but your primary action should be to direct them to inbox/message.
-            
-            Current time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-            Company Name: {actual_company_name}
-            Page Name: {page_info.get('page_name', 'N/A')}
-            Post Content: {post_info.get('post_content', 'N/A')}
-            Post Engagement (Likes: {post_info.get('likes', 0)}, Comments: {post_info.get('comments', 0)}, Shares: {post_info.get('shares', 0)})
-            Extracted Contact Info: Website: {contact_info['website']}, WhatsApp: {contact_info['whatsapp']}, Facebook Group: {contact_info['facebook_group']}
-            Comment History for this Post: {comment_history}
-            """}
-        ]
-
-        # Add the user's comment to the messages
-        messages.append({"role": "user", "content": comment_text})
-
-        llm_reply = ""
-        note = "Reply generated by LLM."
-        input_tokens = 0
-        output_tokens = 0
-
-        try:
-            # Call the OpenRouter API
-            llm_start_time = time.time()
-            response = requests.post(
-                self.base_url,
-                headers=self.headers,
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": 0.7,
-                    "max_tokens": 70 # Adjust max tokens to encourage shorter replies
-                },
-                timeout=30 # Add a timeout to the request
-            )
-            response.raise_for_status() # Raise an exception for HTTP errors
-            llm_response_data = response.json()
-            llm_reply = llm_response_data['choices'][0]['message']['content'].strip()
-            
-            # Count tokens
-            input_tokens = self.count_tokens(messages[0]['content'] + messages[1]['content'])
-            output_tokens = self.count_tokens(llm_reply)
-
-            # Validate the LLM's reply
-            if not self.validate_response(llm_reply, comment_text):
-                print(f"LLM generated invalid reply: '{llm_reply}'. Falling back.")
-                llm_reply = self.get_fallback_response(comment_text, sentiment, comment_language)
-                note = "LLM reply invalid, fallback used."
-                reply_status_code = 500 # Indicate an issue with LLM response quality
-                output_tokens = self.count_tokens(llm_reply) # Recalculate tokens for fallback
-
-            llm_response_time = f"{time.time() - llm_start_time:.2f}s"
-            print(f"LLM Call Time: {llm_response_time}")
-
-        except requests.exceptions.Timeout:
-            print("OpenRouter API request timed out. Using fallback response.")
-            llm_reply = self.get_fallback_response(comment_text, sentiment, comment_language)
-            note = "API timeout, fallback used."
-            reply_status_code = 504 # Gateway Timeout
-            output_tokens = self.count_tokens(llm_reply) # Recalculate tokens for fallback
-        except requests.exceptions.RequestException as e:
-            print(f"Error calling OpenRouter API: {e}. Using fallback response.")
-            llm_reply = self.get_fallback_response(comment_text, sentiment, comment_language)
-            note = f"API error: {e}, fallback used."
-            reply_status_code = 500 # Internal Server Error
-            output_tokens = self.count_tokens(llm_reply) # Recalculate tokens for fallback
-        except Exception as e:
-            print(f"An unexpected error occurred during reply generation: {e}. Using fallback response.")
-            llm_reply = self.get_fallback_response(comment_text, sentiment, comment_language)
-            note = f"Unexpected error: {e}, fallback used."
-            reply_status_code = 500 # Internal Server Error
-            output_tokens = self.count_tokens(llm_reply) # Recalculate tokens for fallback
-
-        end_time = time.time()
-        response_time = f"{end_time - start_time:.2f}s"
+        response_time = f"{time.time() - start_time:.2f}s"
 
         return {
-            "comment_id": comment_info.get("comment_id", ""),
-            "commenter_name": comment_info.get("commenter_name", ""),
+            "comment_id": comment_id,
+            "commenter_name": commenter_name,
+            "controlled": controlled_status,
+            "input_tokens": input_tokens,
+            "note": note,
+            "output_tokens": output_tokens,
             "page_name": page_info.get("page_name", ""),
-            "post_id": post_info.get("post_id", ""),
-            "reply": llm_reply,
+            "post_id": post_id,
+            "reply": reply,
+            "response_time": response_time,
             "sentiment": sentiment,
             "slang_detected": slang_detected,
-            "controlled": True, # Indicates that the response has gone through bot logic
-            "response_time": response_time,
-            "note": note,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
+            "comment_language": comment_language,  # Added language detection result
             "status_code": reply_status_code
         }
 
-facebook_bot = FacebookBot()
+
+@app.route('/', methods=['GET'])
+def display():
+    return 'welcome'
+
+
+@app.route('/test-slang', methods=['POST'])
+def test_slang():
+    """Test endpoint to check slang detection for debugging"""
+    data = request.get_json()
+    if not data or 'text' not in data:
+        return jsonify({"error": "Text is required"}), 400
+
+    bot = FacebookBot()
+    text = data['text']
+    slang_detected = bot.contains_slang(text)
+
+    return jsonify({
+        "text": text,
+        "slang_detected": slang_detected,
+        "message": "Slang detected" if slang_detected else "No slang detected"
+    })
+
 
 @app.route('/process-comment', methods=['POST'])
 def process_comment():
-    print("Received a POST request to /process-comment!",request.get_json()) 
-    if not request.is_json:
-        return jsonify({"error": "Request must be JSON"}), 400
-
     data = request.get_json()
-    response = facebook_bot.generate_reply(data)
-    status_code = response.get("status_code", 200)
-    if response.get("reply") == "" and status_code == 200:
-        pass
+    if not data:
+        return jsonify({"error": "Invalid JSON data"}), 400
 
-    return jsonify(response), status_code
+    bot = FacebookBot()
+    response = bot.generate_reply(data)
+    return jsonify(response), response.get("status_code", 200)
 
-@app.route('/', methods=['GET'])
-def home():
-    return "Facebook Comment Bot is running!"
 
 if __name__ == '__main__':
-    app.run(debug=True,host="0.0.0.0",port=5000)
-    
+    # For production deployment, remove debug=True
+    # Ensure OPENAI_API_KEY or OPENROUTER_API_KEY is set in your .env file or environment variables
+    if os.getenv("OPENAI_API_KEY") is None and os.getenv("OPENROUTER_API_KEY") is None:
+        print(
+            "Error: OPENAI_API_KEY or OPENROUTER_API_KEY environment variable not set. Please set it in a .env file or your system environment.")
+    else:
+        # For production, use: app.run(host="0.0.0.0", port=5000)
+        app.run(debug=False, host="0.0.0.0", port=5000)
